@@ -20,15 +20,15 @@ logger = logging.getLogger(__name__)
 
 # Configuration
 NEWS_API_KEY = os.getenv("NEWS_API_KEY", "660e0e2836b845b2a62b5fa69d847ddb")
-GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "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")
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
 UPDATE_INTERVAL = int(os.getenv("UPDATE_INTERVAL", 3600))  # 1 hour
 
 # Cache
 cache = TTLCache(maxsize=100, ttl=UPDATE_INTERVAL)
 
-# AI/ML related keywords
+# Keywords
 AI_KEYWORDS = {
-    'artificial intelligence', 'ai', 'machine learning', 'ml',
+    'artificial intelligence', 'ai', 'machine learning', 'ml', 
     'deep learning', 'neural network', 'llm', 'nlp',
     'computer vision', 'generative ai', 'chatgpt', 'gpt',
     'openai', 'huggingface', 'transformer', 'pytorch',
@@ -100,7 +100,6 @@ class AITrendTracker:
         return (datetime.utcnow() - self.last_updated).total_seconds() > UPDATE_INTERVAL
 
     def get_ai_news(self) -> List[Dict]:
-        """Get AI/ML related news with proper filtering"""
         if not NEWS_API_KEY:
             logger.warning("NewsAPI key not configured")
             return []
@@ -109,12 +108,8 @@ class AITrendTracker:
             url = (
                 f"https://newsapi.org/v2/everything?"
                 f"q=AI OR 'artificial intelligence' OR 'machine learning' OR 'deep learning'&"
-                f"sortBy=publishedAt&"
-                f"pageSize=100&"
-                f"language=en&"
-                f"apiKey={NEWS_API_KEY}"
+                f"sortBy=publishedAt&pageSize=100&language=en&apiKey={NEWS_API_KEY}"
             )
-
             response = requests.get(url, timeout=10)
             response.raise_for_status()
             articles = response.json().get('articles', [])
@@ -132,7 +127,6 @@ class AITrendTracker:
                         'summary': self.summarize_article(article.get('content', '')),
                         'keywords': self.extract_keywords(article)
                     })
-
             return processed
         except Exception as e:
             logger.error(f"Error fetching news: {str(e)}")
@@ -152,7 +146,7 @@ class AITrendTracker:
             article.get('description', ''),
             article.get('content', '')
         ]).lower()
-        return [keyword for keyword in AI_KEYWORDS if re.search(rf'\b{keyword}\b', text)]
+        return [keyword for keyword in AI_KEYWORDS if keyword in text]
 
     def summarize_article(self, content: str) -> str:
         if not content:
@@ -171,8 +165,9 @@ class AITrendTracker:
             for page in range(1, 4):
                 if len(repos) >= self.config.github_count:
                     break
+
                 response = requests.get(
-                    f"{base_url}?since=weekly&spoken_language_code=en&page={page}",
+                    f"{base_url}?since=weekly&spoken_language_code=en&page={page}", 
                     headers=headers
                 )
                 soup = BeautifulSoup(response.text, 'html.parser')
@@ -180,7 +175,7 @@ class AITrendTracker:
                 time.sleep(1)
 
             repos = [
-                r for r in repos
+                r for r in repos 
                 if r['stars'] >= self.config.min_stars and r['is_ai_related']
             ][:self.config.github_count]
 
@@ -197,8 +192,10 @@ class AITrendTracker:
                 title = article.find('h2').text.strip()
                 owner, name = [s.strip() for s in title.split('/')]
                 desc = article.find('p').text.strip() if article.find('p') else ""
+
                 stars_elem = article.find('a', href=lambda x: x and 'stargazers' in x)
                 stars = int(stars_elem.text.strip().replace(',', '')) if stars_elem else 0
+
                 details = self.get_github_repo_details(owner, name)
                 is_ai = self.is_ai_related_repo(desc, details.get('topics', []))
 
@@ -220,8 +217,7 @@ class AITrendTracker:
 
     def is_ai_related_repo(self, description: str, topics: List[str]) -> bool:
         text = description.lower()
-        return (any(keyword in text for keyword in AI_KEYWORDS) or
-                any(topic.lower() in AI_KEYWORDS for topic in topics))
+        return any(keyword in text for keyword in AI_KEYWORDS) or any(t.lower() in AI_KEYWORDS for t in topics)
 
     def get_github_repo_details(self, owner: str, repo: str) -> Dict:
         cache_key = f"github_{owner}_{repo}"
@@ -252,6 +248,7 @@ class AITrendTracker:
             for model in models:
                 if len(ai_models) >= self.config.hf_count:
                     break
+
                 if model.get('downloads', 0) >= self.config.min_downloads:
                     ai_models.append({
                         'model_id': model['modelId'],
@@ -263,38 +260,35 @@ class AITrendTracker:
                         'likes': model.get('likes', 0),
                         'tags': model.get('tags', [])
                     })
-
             return ai_models
         except Exception as e:
             logger.error(f"HF fetch error: {str(e)}")
             return []
 
-# === FastAPI App ===
+# FastAPI setup
 app = FastAPI()
 tracker = AITrendTracker()
-
-# Initial refresh
 threading.Thread(target=tracker.refresh_data, kwargs={'force': True}).start()
 
 @app.get("/api/ai-trends")
 async def get_trends(
-    news_count: int = Query(20, alias="news_count", gt=0, le=100),
-    github_count: int = Query(20, alias="github_count", gt=0, le=100),
-    hf_count: int = Query(20, alias="hf_count", gt=0, le=100)
+    news: int = Query(20, gt=0, le=100),
+    github: int = Query(20, gt=0, le=100),
+    hf: int = Query(20, gt=0, le=100)
 ):
     try:
-        tracker.config.news_count = news_count
-        tracker.config.github_count = github_count
-        tracker.config.hf_count = hf_count
+        tracker.config.news_count = news
+        tracker.config.github_count = github
+        tracker.config.hf_count = hf
 
         if tracker.needs_refresh():
             threading.Thread(target=tracker.refresh_data).start()
 
         return {
             'last_updated': tracker.last_updated.isoformat() if tracker.last_updated else None,
-            'news': tracker.cached_data['news'][:news_count],
-            'github_repos': tracker.cached_data['github_repos'][:github_count],
-            'hf_models': tracker.cached_data['hf_models'][:hf_count],
+            'news': tracker.cached_data['news'][:news],
+            'github_repos': tracker.cached_data['github_repos'][:github],
+            'hf_models': tracker.cached_data['hf_models'][:hf],
             'is_refreshing': tracker.is_refreshing
         }
     except Exception as e:
@@ -329,4 +323,4 @@ async def health_check():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run(app, host="0.0.0.0", port=8000)
