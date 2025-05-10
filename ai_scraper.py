@@ -19,7 +19,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Configuration
-NEWS_API_KEY = os.getenv("NEWS_API_KEY", "660e0e2836b845b2a62b5fa69d847ddb")
+NEWS_API_KEY = os.getenv("NEWS_API_KEY", "YOUR_API")
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
 UPDATE_INTERVAL = int(os.getenv("UPDATE_INTERVAL", 3600))  # 1 hour
 
